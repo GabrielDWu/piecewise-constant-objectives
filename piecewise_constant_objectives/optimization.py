@@ -10,7 +10,7 @@ full_names = {
     "ss": "Sigmoid Separation",
     "gmhp": "GMHP",
     "hook": "Hook Separation",
-    "perfect_acc": "Girard"
+    "girard": "Girard Accuracy",
 }
 
 def train_model(model, objective="ce", num_steps=2000, lr=0.001, track=["acc"], batch_size=2**20, C_gmhp=None, alpha_hook=0.1, show_plots=True, stop_early_patience=None, delta_ss=0.01, show_progress=True):
@@ -29,8 +29,8 @@ def train_model(model, objective="ce", num_steps=2000, lr=0.001, track=["acc"], 
         stop_early_patience: Number of steps to wait before stopping early if the loss is not improving. If None, will not stop early.
         show_progress: Whether to show a progress bar
     """
-    valid_objectives = ["ce", "ss", "gmhp", "hook"] + ["girard"] if model.n == 3 else []
-    valid_track = ["acc", "ce", "ss", "gmhp", "hook"] + ["girard"] if model.n == 3 else []
+    valid_objectives = ["ce", "ss", "gmhp", "hook"] + (["girard"] if model.n == 3 else [])
+    valid_track = ["acc", "ce", "ss", "gmhp", "hook"] + (["girard"] if model.n == 3 else [])
     assert objective in valid_objectives, f"Invalid objective: {objective}"
     if objective not in track:
         track.append(objective)
@@ -63,7 +63,10 @@ def train_model(model, objective="ce", num_steps=2000, lr=0.001, track=["acc"], 
             logits = model(x)
             
             if "acc" in track:
-                accuracy = (logits.argmax(dim=1) == y).float().mean()
+                # For samples with all-zero logits, mark as incorrect
+                pred = logits.argmax(dim=1)
+                pred[(logits == 0).all(dim=1)] = -1
+                accuracy = (pred == y).float().mean()
                 losses["acc"].append(accuracy.item())
             if "ce" in track:
                 ce = th.nn.functional.cross_entropy(logits, y)
@@ -89,6 +92,21 @@ def train_model(model, objective="ce", num_steps=2000, lr=0.001, track=["acc"], 
                         loss = hook
             
             loss.backward()
+            
+            # Check for NaN gradients before updating weights
+            has_nan_grad = False
+            for name, param in model.named_parameters():
+                if param.grad is not None and th.isnan(param.grad).any():
+                    has_nan_grad = True
+                    print(f"NaN gradient detected in {name}")
+                    
+            if has_nan_grad:
+                print("Model weights before NaN gradient step:")
+                for name, param in model.named_parameters():
+                    print(f"{name}: {param.data}")
+                print("Returning early")
+                return losses
+                
             optimizer.step()
             if stop_early_patience is not None:
                 if loss < best_loss:
@@ -130,8 +148,6 @@ def plot_losses(losses, objective, title=""):
             ax.plot(losses[metric], label=label)
         
         ax.set_title(f"{label}")
-        ax.set_ylabel(f"{label} Value")
-        ax.legend()
         ax.grid(True, alpha=0.3)
     
     # Label the x-axis only on the bottom subplot

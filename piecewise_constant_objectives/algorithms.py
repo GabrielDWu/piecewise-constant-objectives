@@ -7,7 +7,11 @@ def sampling_accuracy(rnn, n_test=2**20):
     logits = rnn(x)
     pred = logits.argmax(dim=1)
     target = x.argsort(dim=1)[:, -2]
-    return (pred == target).to(x.dtype).mean().item()
+    
+    pred = logits.argmax(dim=1)
+    pred[(logits == 0).all(dim=1)] = -1
+
+    return (pred == target).double().mean()
 
 def condition_halfspace(mu: th.tensor, sigma: th.tensor, constraint: th.tensor) -> dict[str, th.tensor]:
     """
@@ -52,32 +56,36 @@ def condition_halfspace(mu: th.tensor, sigma: th.tensor, constraint: th.tensor) 
     return dict(mu=mu, sigma=sigma, prob=prob)
 
 
-def girard_solid_angle_3d(constraints: list[th.Tensor], EPS=1e-9):
+def girard_solid_angle_3d(constraints: list[th.Tensor], EPS=1e-12):
     """
     Uses Girard's formula to calculate the solid angle of the spherical polygon formed by linear constraints. Works in O(len(constraints)^2) time, although more efficient algorithms are possible.
     constraints: a list of (tensors of length 3), each representing a linear constraint
+    Requires that no constraint is a zero vector
         (a0 ... an) means a0*x0 + a1*x1 + a2*x2 >= 0
     """
     dtype = constraints[0].dtype
+    device = constraints[0].device
+    one = th.tensor(1.0, dtype=dtype, device=device, requires_grad=True)
     # remove duplicates
     con = []
-    for c in constraints:
-        c = c / c.norm()
-        for d in con:
-            if (c - d).norm() < EPS:
-                break
-            elif (c - d).norm() > 2 - EPS:
-                return th.tensor(0.0, dtype=dtype)
-        else:
-            con.append(c)
 
+    constraints_tensor = th.stack(constraints)
+    constraints_tensor = constraints_tensor / th.norm(constraints_tensor, dim=1, keepdim=True)
+    pairwise_dots = constraints_tensor @ constraints_tensor.T
+    if (pairwise_dots < -1 + EPS).any():
+        return one * 0.0
+    
+    pairwise_dots = pairwise_dots.triu(diagonal=1)
+    con = list(constraints_tensor[(pairwise_dots < 1 - EPS).all(dim=1)])
+    
     if len(con) == 0:
-        return th.tensor(4 * th.pi, dtype=dtype)
+        return one * 4 * th.pi
     elif len(con) == 1:
-        return th.tensor(2 * th.pi, dtype=dtype)
+        return one * 2 * th.pi
     elif len(con) == 2:
         # angle between two vectors
-        return th.tensor(2 * (th.pi - th.acos(con[0].dot(con[1]))), dtype=dtype)
+        return 2 * (th.pi - th.acos(con[0].dot(con[1])))
+    
 
     # find the longest prefix that is coplanar
     coplanar = []
@@ -103,7 +111,7 @@ def girard_solid_angle_3d(constraints: list[th.Tensor], EPS=1e-9):
     mid = mid / mid.norm()
     # make sure mid has positive dot product with all coplanar vectors
     if any(mid.dot(c) < EPS for c in coplanar):
-        return th.tensor(0.0, dtype=dtype)
+        return one * 0.0
     
     con = [coplanar[furthest[0]], coplanar[furthest[1]]] + con[len(coplanar):]
 
@@ -119,37 +127,41 @@ def girard_solid_angle_3d(constraints: list[th.Tensor], EPS=1e-9):
     points = [
         p0, q0, p1, q1
     ]
+
     for i in range(2, len(con)):
         # intersect with the new constraint
         new_points = []
         c = con[i]
-        if all(c.dot(p) <= EPS for p in points):
+        dots = [p.dot(c) for p in points]
+        if all(d <= EPS for d in dots):
             # check if any points are on right side of c
-            return th.tensor(0.0, dtype=dtype)
-        if all(c.dot(p) >= -EPS for p in points):
+            return one * 0.0
+        if all(d >= -EPS for d in dots):
             continue
         
         start = 0
-        while points[start].dot(c) < EPS:
+        while dots[start] < EPS:
             start += 1
         points = points[start:] + points[:start]
+        dots = dots[start:] + dots[:start]
         points.append(points[0])
+        dots.append(dots[0])
 
         new_points = []
         for i in range(len(points)-1):
-            if points[i].dot(c) >= -EPS:
+            if dots[i] >= -EPS:
                 new_points.append(points[i])
-                if points[i+1].dot(c) < -EPS:
+                if dots[i+1] < -EPS:
                     # crosses over
                     x, y = points[i], points[i+1]
-                    z = (x * abs(c.dot(y)) + y * abs(c.dot(x)))
+                    z = (x * abs(dots[i+1]) + y * abs(dots[i]))
                     z = z / z.norm()
                     new_points.append(z)
             else:
-                if points[i+1].dot(c) >= -EPS:
+                if dots[i+1] >= -EPS:
                     # crosses over
                     x, y = points[i], points[i+1]
-                    z = (x * abs(c.dot(y)) + y * abs(c.dot(x)))
+                    z = (x * abs(dots[i+1]) + y * abs(dots[i]))
                     z = z / z.norm()
                     new_points.append(z)
         
@@ -158,13 +170,13 @@ def girard_solid_angle_3d(constraints: list[th.Tensor], EPS=1e-9):
             if len(points) == 0 or (p - points[-1]).norm() > EPS:
                 points.append(p)
     
-    
     # now, find angles between points
     assert len(points) >= 3
 
     assert all(abs(p.norm() - 1) < EPS for p in points)
     # make sure no two consecutive points are the same
     assert all((points[i] - points[(i+1)%len(points)]).norm() > EPS for i in range(len(points)))
+
     angles = []
     for i in range(len(points)):
         x, y, z = points[i], points[(i+1)%len(points)], points[(i+2)%len(points)]
@@ -177,12 +189,13 @@ def girard_solid_angle_3d(constraints: list[th.Tensor], EPS=1e-9):
         a = a / a.norm()
         b = b / b.norm()
 
-        angles.append(th.acos(a.dot(b)))
-
+        dot = a.dot(b)
+        if dot > -1:
+            angles.append(th.acos(a.dot(b)))
         
-    return sum(angles) - th.pi * (len(points) - 2)
+    return sum(angles) - th.pi * (len(angles) - 2)
 
-def exact_acc_rnn(rnn):
+def exact_acc_rnn(rnn, EPS=1e-12):
     """
     Find the accuracy of the model by considering linear regions.
     Only works for n=3.
@@ -235,7 +248,9 @@ def exact_acc_rnn(rnn):
 
     ans = th.tensor(0.0, dtype=rnn.dtype, device=rnn.device)
     for region in all_regions:
-        s = girard_solid_angle_3d(region)
+        if any(c.norm() == 0 for c in region):
+            continue
+        s = girard_solid_angle_3d(region, EPS=EPS)
         ans += s
     return ans / (4 * th.pi)
 
