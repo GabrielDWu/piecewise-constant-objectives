@@ -1,3 +1,4 @@
+import functools
 import torch as th
 from .algorithms import GMHP, exact_acc_rnn
 from matplotlib import pyplot as plt
@@ -13,14 +14,33 @@ full_names = {
     "girard": "Girard Accuracy",
 }
 
-def train_model(model, objective="ce", num_steps=2000, lr=0.001, track=["acc"], batch_size=2**20, C_gmhp=None, alpha_hook=0.1, show_plots=True, stop_early_patience=None, delta_ss=0.01, show_progress=True):
+
+def lr_mult_schedule(step, *, n_steps, warmup_steps, decay_min_mult):
+    warmup = min(step / warmup_steps, 1)
+    decay = max(decay_min_mult ** (2 * step / n_steps), decay_min_mult)
+    return warmup * decay
+
+def train_model(model,
+                objective="ce",
+                num_steps=2000,
+                track=["acc"],
+                batch_size=2**20,
+                C_gmhp=None,
+                alpha_hook=0.1,
+                show_plots=True,
+                delta_ss=0.01,
+                show_progress=True,
+                
+                lr_base=0.01,
+                lr_warmup_ratio=.1,
+                lr_decay_min_mult=0.01,
+                ):
     """Train using a sharpened loss based on sigmoid of margin between correct and highest incorrect logit.
     
     Args:
         model: The RNN model to train
         objective: The method to train the model with. Can be "ce", "ss", "gmhp", "hook", or "girard"
         track: What to track during training. List, can include "acc" or any of the objectives
-        lr: Learning rate
         C_gmhp: The pruning parameter for GMHP loss.
         alpha_hook: The thresholding parameter for hook loss.
         delta_ss: The scaling parameter for sigmoid separation loss.
@@ -28,6 +48,9 @@ def train_model(model, objective="ce", num_steps=2000, lr=0.001, track=["acc"], 
         batch_size: Batch size for training
         stop_early_patience: Number of steps to wait before stopping early if the loss is not improving. If None, will not stop early.
         show_progress: Whether to show a progress bar
+        lr_base: Learning rate, scaled by sqrt(d)
+        lr_warmup_ratio: Ratio of warmup steps to total steps
+        lr_decay_min_mult: Minimum multiplier for learning rate decay
     """
     valid_objectives = ["ce", "ss", "gmhp", "hook"] + (["girard"] if model.n == 3 else [])
     valid_track = ["acc", "ce", "ss", "gmhp", "hook"] + (["girard"] if model.n == 3 else [])
@@ -36,11 +59,17 @@ def train_model(model, objective="ce", num_steps=2000, lr=0.001, track=["acc"], 
         track.append(objective)
     assert all(t in valid_track for t in track), f"Invalid track: {track}"
 
+    lr = lr_base / model.d**0.5
+    lr_lambda = functools.partial(
+        lr_mult_schedule,
+        n_steps=num_steps,
+        warmup_steps=lr_warmup_ratio * num_steps,
+        decay_min_mult=lr_decay_min_mult,
+    )
     optimizer = th.optim.Adam(model.parameters(), lr=lr)
-    losses = {t: [] for t in track}
+    lr_scheduler = th.optim.lr_scheduler.LambdaLR(optimizer, lr_lambda=lr_lambda)
 
-    best_loss = float("inf")
-    patience_counter = 0
+    losses = {t: [] for t in track}
 
     with th.enable_grad():
         for _ in tqdm(range(num_steps), disable=not show_progress):
@@ -66,7 +95,8 @@ def train_model(model, objective="ce", num_steps=2000, lr=0.001, track=["acc"], 
                 # For samples with all-zero logits, mark as incorrect
                 pred = logits.argmax(dim=1)
                 pred[(logits == 0).all(dim=1)] = -1
-                accuracy = (pred == y).float().mean()
+
+                accuracy = (pred == y).float().mean() + (pred == -1).float().mean() / model.n
                 losses["acc"].append(accuracy.item())
             if "ce" in track:
                 ce = th.nn.functional.cross_entropy(logits, y)
@@ -107,15 +137,9 @@ def train_model(model, objective="ce", num_steps=2000, lr=0.001, track=["acc"], 
                 print("Returning early")
                 return losses
                 
+            
             optimizer.step()
-            if stop_early_patience is not None:
-                if loss < best_loss:
-                    best_loss = loss
-                    patience_counter = 0
-                else: 
-                    patience_counter += 1
-                    if patience_counter >= stop_early_patience:
-                        break
+            lr_scheduler.step()
     
     # Create a single plot with all tracked metrics
     if show_plots:

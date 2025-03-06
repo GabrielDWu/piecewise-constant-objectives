@@ -11,7 +11,7 @@ def sampling_accuracy(rnn, n_test=2**20):
     pred = logits.argmax(dim=1)
     pred[(logits == 0).all(dim=1)] = -1
 
-    return (pred == target).double().mean()
+    return ((pred == target).double().mean() + (pred == -1).double().mean() / rnn.n)
 
 def condition_halfspace(mu: th.tensor, sigma: th.tensor, constraint: th.tensor) -> dict[str, th.tensor]:
     """
@@ -248,10 +248,14 @@ def exact_acc_rnn(rnn, EPS=1e-12):
 
     ans = th.tensor(0.0, dtype=rnn.dtype, device=rnn.device)
     for region in all_regions:
-        if any(c.norm() == 0 for c in region):
-            continue
+        any_zero = any(c.norm() == 0 for c in region)
+        region = [c for c in region if c.norm() > 0]
+            
         s = girard_solid_angle_3d(region, EPS=EPS)
-        ans += s
+        if any_zero:
+            ans += s / rnn.n
+        else:
+            ans += s
     return ans / (4 * th.pi)
 
 def GMHP(rnn, C=None):
@@ -360,7 +364,7 @@ def GMHP(rnn, C=None):
     for i in range(n):
         mask = winners != i
         if mask.any():
-            constraint_mask = (th.norm(logits[th.arange(len(winners)), winners] - logits[th.arange(len(winners)), i], dim=1) > 0) & mask
+            constraint_mask = (th.norm(logits[th.arange(len(winners)), winners] - logits[th.arange(len(winners)), i], dim=1) > 0) & mask # For convenience we ignore the case where the logits are equal, but for n >= 4 this only changes the final probability by a tiny amount
             
             if constraint_mask.any():
                 constraint = logits[constraint_mask, winners[constraint_mask]] - logits[constraint_mask, i]

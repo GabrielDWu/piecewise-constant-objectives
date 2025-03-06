@@ -14,26 +14,25 @@ import numpy as np
 from piecewise_constant_objectives import *
 import pickle
 # %%
-
-rnn = RNN(hidden_size=2, seq_len=3, load_from_zoo=True)
-losses = train_model(rnn, objective="gmhp", num_steps=200, lr=0.00005, track=["acc"], C_gmhp=10000)
+rnn = RNN(hidden_size=3, seq_len=4, load_from_zoo=True)
+losses = train_model(rnn, objective="gmhp", num_steps=250, lr_base=0.01, track=["acc"], C_gmhp=10000)
 print(f"final gmhp loss: {losses['gmhp'][-1]:.4f}")
 print(f"final acc: {losses['acc'][-1]:.4f}")
 print(f"acc improvement: {losses['acc'][-1] - losses['acc'][0]:.4f}")
 # %%
-rnn = RNN(hidden_size=2, seq_len=3, load_from_zoo=True)
-losses = train_model(rnn, objective="ss", num_steps=500, lr=0.0005, track=["acc"], delta_ss=0.01)
+rnn = RNN(hidden_size=5, seq_len=8, load_from_zoo=True)
+losses = train_model(rnn, objective="ss", num_steps=500, lr_base=0.01, track=["acc"], delta_ss=0.01, lr_decay_min_mult=0.1)
 print(f"final ss loss: {losses['ss'][-1]:.4f}")
 print(f"final acc: {losses['acc'][-1]:.4f}")
 print(f"acc improvement: {losses['acc'][-1] - losses['acc'][0]:.4f}")
 # %%
-rnn = RNN(hidden_size=2, seq_len=3, load_from_zoo=True)
-losses = train_model(rnn, objective="hook", num_steps=500, lr=0.0005, track=["acc"], alpha_hook=1)
+rnn = RNN(hidden_size=3, seq_len=4, load_from_zoo=True)
+losses = train_model(rnn, objective="hook", num_steps=500, lr_base=0.01, track=["acc"], alpha_hook=1)
 print(f"final hook loss: {losses['hook'][-1]:.4f}")
 print(f"final acc: {losses['acc'][-1]:.4f}")
 print(f"acc improvement: {losses['acc'][-1] - losses['acc'][0]:.4f}")
 # %%
-def run_model_grid(ns, ds, objectives={"gmhp": {"num_steps": 250, "C_gmhp": 10000, "lr": 0.0005}, "ss": {"num_steps": 500, "lr": 0.005}, "hook": {"num_steps": 500, "alpha_hook": 1, "lr": 0.005}}):
+def run_model_grid(ns, ds, objectives={"gmhp": {"num_steps": 250, "C_gmhp": 10000}, "ss": {"num_steps": 500}, "hook": {"num_steps": 500, "alpha_hook": 1}}):
     """
     Generates a dictionary all_losses[n][d][objective], and final_accs[n][d][objective]
     """
@@ -57,7 +56,7 @@ ns = [4, 5, 6, 8]
 ds = [3, 4, 5, 6]
 all_losses, final_accs = run_model_grid(ns, ds)
 # %%
-with open("piecewise-constant-objectives/data/all_losses.pkl", "rb") as f:
+with open("piecewise-constant-objectives/data/all_losses_new.pkl", "rb") as f:
     all_losses = pickle.load(f)
 
 final_accs = {}
@@ -125,7 +124,7 @@ def print_accuracy_table(ns, ds, final_accs):
     plt.bar(x + width, hook_diffs, width, label='Hook', color='#2ca02c')
     
     # Set the y-axis limit
-    y_limit = -0.04
+    y_limit = -0.07
     plt.ylim(bottom=y_limit)
     
     # Add value labels for hook_diff bars that are cut off by the y-axis limit
@@ -153,21 +152,3 @@ def print_accuracy_table(ns, ds, final_accs):
 
 # Call the function with our ns, ds, and final_accs
 print_accuracy_table(ns, ds, final_accs)
-
-# %%
-# Train on perfect accuracy
-rnn = RNN(hidden_size=2, seq_len=3, load_from_zoo=True)
-losses2 = train_model(rnn, objective="girard", num_steps=2000, lr=0.005, track=["ce", "acc"])
-# %%
-print(f"final girard acc: {losses['girard'][-1]:.4f}")
-print(f"final sampling acc: {losses['acc'][-1]:.4f}")
-print(f"girard acc improvement: {losses['girard'][-1] - losses['girard'][0]:.4f}")
-# %%
-rnn = RNN(hidden_size=2, seq_len=3, load_from_zoo=True)
-exact_acc_rnn(rnn)
-# %%
-sampling_accuracy(rnn, n_test=2**24)
-# %%
-rnn = RNN(hidden_size=3, seq_len=3, load_from_zoo=True)
-losses = train_model(rnn, objective="girard", num_steps=200, lr=0.001, track=["ce", "acc"])
-# %%
