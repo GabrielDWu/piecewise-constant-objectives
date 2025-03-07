@@ -9,7 +9,8 @@ setup(
         "numpy",
         "pandas",
         "matplotlib",
-        "tqdm"
+        "tqdm",
+        "blobfile"
     ],
     extras_require={
         "test": ["pytest"],

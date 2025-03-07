@@ -54,6 +54,7 @@ def run_model_grid(ns, ds, objectives={"gmhp": {"num_steps": 250, "C_gmhp": 1000
 # %%
 ns = [4, 5, 6, 8]
 ds = [3, 4, 5, 6]
+# %%
 all_losses, final_accs = run_model_grid(ns, ds)
 # %%
 with open("piecewise-constant-objectives/data/all_losses_new.pkl", "rb") as f:
@@ -152,3 +153,126 @@ def print_accuracy_table(ns, ds, final_accs):
 
 # Call the function with our ns, ds, and final_accs
 print_accuracy_table(ns, ds, final_accs)
+
+# %%
+rnn3 = RNN(hidden_size=3, seq_len=3, load_from_zoo=True)
+losses3 = train_model(rnn3, objective="girard", num_steps=500, lr_base=0.005, lr_decay_min_mult=1, track=["ce", "acc"])
+losses3short = {}
+for key in losses3.keys():
+    if key != "acc":
+        losses3short[key] = losses3[key][:301]
+
+# This is a Figure.
+plot_losses(losses3short, "girard", title="n=3, d=3")
+
+# %%
+## Switch accuracy to Acc'. Then, this is a Figure.
+rnn = RNN(hidden_size=2, seq_len=3, load_from_zoo=True)
+losses = train_model(rnn, objective="girard", num_steps=2000, lr_base=0.005 * 1.4, lr_decay_min_mult=1, track=["ce", "acc"])
+
+# %%
+
+def plot_objective_grid(all_losses, n, d):
+    """
+    Creates a 2x2 grid of subplots showing:
+    - NW: Accuracy curves for all objectives (normalized by gradient steps)
+    - NE: SS objective loss curve
+    - SE: HH (Hook) objective loss curve
+    - SW: GMHP objective loss curve
+    
+    Args:
+        all_losses: Dictionary of losses indexed by n, d, and objective
+        n: Sequence length
+        d: Hidden size
+    """
+    # Create a 2x2 grid of subplots
+    fig, axes = plt.subplots(2, 2, figsize=(16, 8))
+    fig.suptitle(f'n={n}, d={d}', fontsize=16)
+    
+    # Define colors for each objective (matching print_accuracy_table)
+    colors = {
+        'gmhp': '#1f77b4',  # blue
+        'ss': '#ff7f0e',    # orange
+        'hook': '#2ca02c'   # green
+    }
+    
+    # Extract losses for the specified n and d
+    losses = all_losses[n][d]
+    
+    # Get the number of steps for each objective
+    gmhp_steps = len(losses['gmhp']['acc'])
+    ss_steps = len(losses['ss']['acc'])
+    hook_steps = len(losses['hook']['acc'])
+    
+    # NW subplot - Accuracy for all objectives (with normalized steps)
+    ax_acc = axes[0, 0]
+    
+    # Create normalized x-axes for each accuracy curve
+    gmhp_x = np.linspace(0, 1, gmhp_steps)
+    ss_x = np.linspace(0, 1, ss_steps)
+    hook_x = np.linspace(0, 1, hook_steps)
+    
+    # Plot accuracy curves
+    ax_acc.plot(gmhp_x, losses['gmhp']['acc'], label='GMHP', color=colors['gmhp'], linewidth=2)
+    ax_acc.plot(ss_x, losses['ss']['acc'], label='SS', color=colors['ss'], linewidth=2)
+    ax_acc.plot(hook_x, losses['hook']['acc'], label='Hook', color=colors['hook'], linewidth=2)
+    
+    ax_acc.set_title('Accuracy')
+    ax_acc.set_xlabel('Normalized Gradient Steps')
+    ax_acc.grid(True, alpha=0.3)
+    ax_acc.legend()
+    
+    # NE subplot - SS objective
+    ax_ss = axes[0, 1]
+    if 'ss' in losses['ss']:  # The loss might be named 'ss'
+        ax_ss.plot(losses['ss']['ss'], color=colors['ss'], linewidth=2)
+    else:  # If there's no specific 'ss' loss, use the objective
+        for key in losses['ss'].keys():
+            if key != 'acc':  # Plot the non-accuracy loss
+                ax_ss.plot(losses['ss'][key], color=colors['ss'], linewidth=2)
+                break
+    
+    ax_ss.set_title('SS Objective')
+    ax_ss.set_xlabel('Gradient Steps')
+    ax_ss.grid(True, alpha=0.3)
+    
+    # SE subplot - Hook objective
+    ax_hook = axes[1, 1]
+    if 'hook' in losses['hook']:  # The loss might be named 'hook'
+        ax_hook.plot(losses['hook']['hook'], color=colors['hook'], linewidth=2)
+    else:  # If there's no specific 'hook' loss, use the objective
+        for key in losses['hook'].keys():
+            if key != 'acc':  # Plot the non-accuracy loss
+                ax_hook.plot(losses['hook'][key], color=colors['hook'], linewidth=2)
+                break
+    
+    ax_hook.set_title('Hook Objective')
+    ax_hook.set_xlabel('Gradient Steps')
+    ax_hook.grid(True, alpha=0.3)
+    
+    # SW subplot - GMHP objective
+    ax_gmhp = axes[1, 0]
+    if 'gmhp' in losses['gmhp']:  # The loss might be named 'gmhp'
+        ax_gmhp.plot(losses['gmhp']['gmhp'], color=colors['gmhp'], linewidth=2)
+    else:  # If there's no specific 'gmhp' loss, use the objective
+        for key in losses['gmhp'].keys():
+            if key != 'acc':  # Plot the non-accuracy loss
+                ax_gmhp.plot(losses['gmhp'][key], color=colors['gmhp'], linewidth=2)
+                break
+    
+    ax_gmhp.set_title('GMHP Objective')
+    ax_gmhp.set_xlabel('Gradient Steps')
+    ax_gmhp.grid(True, alpha=0.3)
+    
+    # Adjust layout
+    plt.tight_layout()
+    plt.subplots_adjust(top=0.9)  # Make room for the suptitle
+    plt.show()
+# %%
+for n in [4, 5, 6, 8]:
+    for d in [3, 4, 5, 6]:
+        if n == 4 and d == 3:
+            continue
+        plot_objective_grid(all_losses, n, d)
+
+# %%

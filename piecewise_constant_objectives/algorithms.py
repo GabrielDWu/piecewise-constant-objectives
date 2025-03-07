@@ -1,6 +1,5 @@
 import torch as th
 import itertools
-from .model import RNN
 
 def sampling_accuracy(rnn, n_test=2**20):
     x = th.randn(n_test, rnn.n, dtype=rnn.dtype, device=rnn.device)

@@ -2,7 +2,6 @@ import functools
 import torch as th
 from .algorithms import GMHP, exact_acc_rnn
 from matplotlib import pyplot as plt
-import numpy as np
 from tqdm import tqdm
 
 full_names = {
